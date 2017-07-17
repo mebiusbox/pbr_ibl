@@ -13,6 +13,21 @@ uniform vec3 albedo;
 #define RECIPROCAL_PI2 0.15915494
 #define LOG2 1.442695
 #define EPSILON 1e-6
+//#define saturate(x) clamp(x, 0.0, 1.0)
+
+float pow2(const in float x) { return x*x; }
+vec3 transformDirection(in vec3 dir, in mat4 matrix) {
+  return normalize((matrix * vec4(dir, 0.0)).xyz);
+}
+vec3 inverseTransformDirection(in vec3 dir, in mat4 matrix) {
+  return normalize((vec4(dir, 0.0) * matrix).xyz);
+}
+// vec4 GammaToLinear(in vec4 value, in float gammaFactor) {
+//   return vec4(pow(value.xyz, vec3(gammaFactor)), value.w);
+// }
+// vec4 LinearToGamma(in vec4 value, in float gammaFactor) {
+//   return vec4(pow(value.xyz, vec3(1.0/gammaFactor)), value.w);
+// }
 
 struct IncidentLight {
   vec3 color;
@@ -122,6 +137,7 @@ uniform SpotLight spotLights[LIGHT_MAX];
 uniform int numDirectionalLights;
 uniform int numPointLights;
 uniform int numSpotLights;
+uniform float directLightIntensity;
 
 // BRDFs
 
@@ -182,6 +198,68 @@ void RE_Direct(const in IncidentLight directLight, const in GeometricContext geo
   reflectedLight.directSpecular += irradiance * SpecularBRDF(directLight, geometry, material.specularColor, material.specularRoughness);
 }
 
+// IBLs
+uniform samplerCube radianceMap;
+uniform samplerCube irradianceMap;
+uniform float radianceMapIntensity;
+uniform float irradianceMapIntensity;
+
+// [ Lazarov 2013 "Getting More Physical in Call of Duty: Black Ops II" ]
+// Adaptation to fit our G term
+// ref: https://www.unrealengine.com/blog/physically-based-shading-on-mobile - environmentBRDF for GGX on mobile
+// BRDF_Specular_GGX_Environment
+vec3 EnvBRDFApprox(vec3 specularColor, float roughness, float NoV) {
+  const vec4 c0 = vec4(-1, -0.0275, -0.572, 0.022);
+  const vec4 c1 = vec4(1, 0.0425, 1.04, -0.04 );
+  vec4 r = roughness * c0 + c1;
+  float a004 = min(r.x * r.x, exp2(-9.28 * NoV)) * r.x + r.y;
+  vec2 AB = vec2(-1.04, 1.04) * a004 + r.zw;
+  return specularColor * AB.x + AB.y;
+}
+
+// three.js (bsdfs.glsl)
+// source: http://simonstechblog.blogspot.ca/2011/12/microfacet-brdf.html
+float GGXRoughnessToBlinnExponent(const in float ggxRoughness) {
+  return 2.0 / pow2(ggxRoughness + 0.0001) - 2.0;
+}
+
+float BlinnExponentToGGXRoughness(const in float blinnExponent) {
+  return sqrt(2.0 / (blinnExponent + 2.0));
+}
+
+// taken from here: http://casual-effects.blogspot.ca/2011/08/plausible-environment-lighting-in-two.html
+float getSpecularMipLevel(const in float blinnShininessExponent, const in int maxMipLevel) {
+  float maxMipLevelScalar = float(maxMipLevel);
+  float desiredMipLevel = maxMipLevelScalar - 0.79248 - 0.5 * log2(pow2(blinnShininessExponent)+1.0);
+  
+  // clamp to allowable LOD ranges
+  return clamp(desiredMipLevel, 0.0, maxMipLevelScalar);
+}
+
+vec3 getLightProbeIndirectIrradiance(const in vec3 N, const in float blinnShininessExponent, const in int maxMipLevel) {
+  vec3 worldNormal = inverseTransformDirection(N, viewMatrix);
+  vec3 queryVec = vec3(-worldNormal.x, worldNormal.yz); //flip
+  return PI * GammaToLinear(textureCube(irradianceMap, queryVec), float(GAMMA_FACTOR)).rgb * irradianceMapIntensity;
+  //return PI * GammaToLinear(textureCubeLodEXT(radianceMap, queryVec, float(maxMipLevel)), float(GAMMA_FACTOR)).rgb * irradianceMapIntensity;
+}
+
+vec3 getLightProbeIndirectRadiance(const in vec3 V, const in vec3 N, const in float blinnShininessExponent, const in int maxMipLevel) {
+  vec3 reflectVec = inverseTransformDirection(reflect(-V, N), viewMatrix);
+  float specMipLevel = getSpecularMipLevel(blinnShininessExponent, maxMipLevel);
+  vec3 queryVec = vec3(-reflectVec.x, reflectVec.yz); //flip
+  return GammaToLinear(textureCubeLodEXT(radianceMap, queryVec, specMipLevel), float(GAMMA_FACTOR)).rgb * radianceMapIntensity;
+}
+
+void RE_IndirectDiffuse(const in vec3 irradiance, const in GeometricContext geometry, const in Material material, inout ReflectedLight reflectedLight) {
+  reflectedLight.indirectDiffuse += irradiance * DiffuseBRDF(material.diffuseColor);
+}
+
+void RE_IndirectSpecular(const in vec3 radiance, const in GeometricContext geometry, const in Material material, inout ReflectedLight reflectedLight) {
+  float dotNV = saturate(dot(geometry.normal, geometry.viewDir));
+  reflectedLight.indirectSpecular += radiance * EnvBRDFApprox(material.specularColor, material.specularRoughness, dotNV);
+}
+
+
 void main() {
   GeometricContext geometry;
   geometry.position = -vViewPosition;
@@ -226,7 +304,17 @@ void main() {
     RE_Direct(directLight, geometry, material, reflectedLight);
   }
   
-  vec3 outgoingLight = emissive + reflectedLight.directDiffuse + reflectedLight.directSpecular + reflectedLight.indirectDiffuse + reflectedLight.indirectSpecular;
+  reflectedLight.directDiffuse *= directLightIntensity;
+  reflectedLight.directSpecular *= directLightIntensity;
   
-  gl_FragColor = vec4(outgoingLight, opacity);
+  // IBL
+  float blinnExponent = GGXRoughnessToBlinnExponent(material.specularRoughness);
+  vec3 irradiance = getLightProbeIndirectIrradiance(geometry.normal, blinnExponent, 8);
+  RE_IndirectDiffuse(irradiance, geometry, material, reflectedLight);
+  
+  vec3 radiance = getLightProbeIndirectRadiance(geometry.viewDir, geometry.normal, blinnExponent, 8);
+  RE_IndirectSpecular(radiance, geometry, material, reflectedLight);
+  
+  vec3 outgoingLight = emissive + reflectedLight.directDiffuse + reflectedLight.directSpecular + reflectedLight.indirectDiffuse + reflectedLight.indirectSpecular;
+  gl_FragColor = LinearToGamma(vec4(toneMapping(outgoingLight), opacity), float(GAMMA_FACTOR));
 }
