@@ -151,7 +151,10 @@
           irradianceMap: {value: null},
           directLightIntensity: {value: 1.0},
           radianceMapIntensity: {value: 1.0},
-          irradianceMapIntensity: {value: 0.2}
+          irradianceMapIntensity: {value: 0.2},
+          irradcoeff: {value:[]},
+          irradSH: {value:1.0},
+          irradSHIntensity: {value:[1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0]}
         };
         
         for (var i=0; i<4; ++i) {
@@ -178,6 +181,17 @@
           });
         }
         
+        // Irradiance cofficients
+        uniforms.irradcoeff.value.push(new THREE.Vector3(2.263794, 2.112859, 1.853092));
+        uniforms.irradcoeff.value.push(new THREE.Vector3(0.360896, 0.250274, 0.047612));
+        uniforms.irradcoeff.value.push(new THREE.Vector3(-0.140168, -0.143983, -0.072270));
+        uniforms.irradcoeff.value.push(new THREE.Vector3(-0.140043, -0.153935, -0.106958));
+        uniforms.irradcoeff.value.push(new THREE.Vector3(-0.113513, -0.115773, -0.054683));
+        uniforms.irradcoeff.value.push(new THREE.Vector3(-0.176000, -0.177246, -0.111137));
+        uniforms.irradcoeff.value.push(new THREE.Vector3(0.071074, 0.046293, 0.001691));
+        uniforms.irradcoeff.value.push(new THREE.Vector3(0.022206, 0.058091, 0.070111));
+        uniforms.irradcoeff.value.push(new THREE.Vector3(0.118309, 0.067290, -0.023265));
+
         standardMaterial = new THREE.MeshStandardMaterial();
         material = new THREE.ShaderMaterial({
           uniforms: uniforms,
@@ -246,6 +260,16 @@
           directLightIntensity: uniforms.directLightIntensity.value,
           radianceMapIntensity: uniforms.radianceMapIntensity.value,
           irradianceMapIntensity: uniforms.irradianceMapIntensity.value,
+          sphericalHarmonics: true,
+          shL00: true,
+          shL1_1: true,
+          shL10: true,
+          shL11: true,
+          shL2_2: true,
+          shL2_1: true,
+          shL20: true,
+          shL21: true,
+          shL22: true,
           exposure: renderer.toneMappingExposure,
           whitePoint: renderer.toneMappingWhitePoint
         };
@@ -262,6 +286,16 @@
         h.add(effectController, "directLightIntensity", 0.0, 1.0, 0.01);
         h.add(effectController, "radianceMapIntensity", 0.0, 1.0, 0.01);
         h.add(effectController, "irradianceMapIntensity", 0.0, 1.0, 0.01);
+        h.add(effectController, "sphericalHarmonics");
+        h.add(effectController, "shL00");
+        h.add(effectController, "shL1_1");
+        h.add(effectController, "shL10");
+        h.add(effectController, "shL11");
+        h.add(effectController, "shL2_2");
+        h.add(effectController, "shL2_1");
+        h.add(effectController, "shL20");
+        h.add(effectController, "shL21");
+        h.add(effectController, "shL22");
         h.add(effectController, "exposure", 0.0, 10.0, 0.01);
         h.add(effectController, "whitePoint", 0.0, 10.0, 0.01);
       }
@@ -314,6 +348,17 @@
           uniforms.directLightIntensity.value = effectController.directLightIntensity;
           uniforms.radianceMapIntensity.value = effectController.radianceMapIntensity;
           uniforms.irradianceMapIntensity.value = effectController.irradianceMapIntensity;
+          uniforms.irradSH.value = effectController.sphericalHarmonics ? 1.0 : 0.0;
+          
+          uniforms.irradSHIntensity.value[0] = effectController.shL00 ? 1.0 : 0.0;
+          uniforms.irradSHIntensity.value[1] = effectController.shL1_1 ? 1.0 : 0.0;
+          uniforms.irradSHIntensity.value[2] = effectController.shL10 ? 1.0 : 0.0;
+          uniforms.irradSHIntensity.value[3] = effectController.shL11 ? 1.0 : 0.0;
+          uniforms.irradSHIntensity.value[4] = effectController.shL2_2 ? 1.0 : 0.0;
+          uniforms.irradSHIntensity.value[5] = effectController.shL2_1 ? 1.0 : 0.0;
+          uniforms.irradSHIntensity.value[6] = effectController.shL20 ? 1.0 : 0.0;
+          uniforms.irradSHIntensity.value[7] = effectController.shL21 ? 1.0 : 0.0;
+          uniforms.irradSHIntensity.value[8] = effectController.shL22 ? 1.0 : 0.0;
           
           uniforms.numDirectionalLights.value = 1;
           uniforms.directionalLights.value[0].direction.copy(lights.directional.position).normalize().transformDirection(viewMatrix);

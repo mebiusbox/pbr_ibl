@@ -239,6 +239,7 @@ float getSpecularMipLevel(const in float blinnShininessExponent, const in int ma
 vec3 getLightProbeIndirectIrradiance(const in vec3 N, const in float blinnShininessExponent, const in int maxMipLevel) {
   vec3 worldNormal = inverseTransformDirection(N, viewMatrix);
   vec3 queryVec = vec3(-worldNormal.x, worldNormal.yz); //flip
+  // return PI * textureCube(irradianceMap, queryVec).rgb * irradianceMapIntensity;
   return PI * GammaToLinear(textureCube(irradianceMap, queryVec), float(GAMMA_FACTOR)).rgb * irradianceMapIntensity;
   //return PI * GammaToLinear(textureCubeLodEXT(radianceMap, queryVec, float(maxMipLevel)), float(GAMMA_FACTOR)).rgb * irradianceMapIntensity;
 }
@@ -259,6 +260,72 @@ void RE_IndirectSpecular(const in vec3 radiance, const in GeometricContext geome
   reflectedLight.indirectSpecular += radiance * EnvBRDFApprox(material.specularColor, material.specularRoughness, dotNV);
 }
 
+// SH
+uniform vec3 irradcoeff[9];
+uniform float irradSH;
+uniform float irradSHIntensity[9];
+vec3 sphericalHarmonics(const in vec3 N) {
+  float x2;
+  float y2;
+  float z2;
+  float xy;
+  float yz;
+  float xz;
+  float x;
+  float y;
+  float z;
+  vec3 col;
+
+  // 0: Y{0, 0} =  0.282095
+  // 1: Y{1,-1} = -0.488603(y)
+  // 2: Y{1, 0} =  0.488603(z)
+  // 3: Y{1, 1} = -0.488603(x)
+  // 4: Y{2,-2} =  1.092548(xy)
+  // 5: Y{2,-1} = -1.092548(yz)
+  // 6: Y{2, 0} =  0.315392(3z^2-1)
+  // 7: Y{2, 1} = -1.092548(xz)
+  // 8: Y{2, 2} =  0.546274(x^2-y^2)
+  
+  // PI = 3.141593
+  // 2PI / 3 = 2.094395
+  // PI / 4 = 0.785398
+  
+  const float c1 = 0.429043;  // 0.546274 * PI / 4
+  const float c2 = 0.511664;  // 0.488603 * 2PI / 3 * 0.5 (?)
+  const float c2a = 1.023328; // 0.488603 * 2PI / 3
+  const float c3 = 0.743125;  // c5 * 3.0
+  const float c4 = 0.886227;  // 0.282095 * PI
+  const float c5 = 0.247708;  // 0.315392 * PI / 4
+  x = N.x;
+  y = N.y;
+  z = N.z;
+  
+  x2 = x*x; y2 = y*y; z2 = z*z;
+  xy = x*y; yz = y*z; xz = x*z;
+  
+  // L0
+  col = c4*irradcoeff[0] * irradSHIntensity[0];
+  
+  // L1
+  col += 2.0 * c2 * irradcoeff[3]*x * irradSHIntensity[1];
+  col += 2.0 * c2 * irradcoeff[1]*y * irradSHIntensity[2];
+  col += 2.0 * c2 * irradcoeff[2]*z * irradSHIntensity[3];
+  
+  // L2
+  col += 2.0*c1*irradcoeff[4]*xy * irradSHIntensity[4];
+  col += 2.0*c1*irradcoeff[5]*yz * irradSHIntensity[5];
+  col += c3*irradcoeff[6]*z2 - c5*irradcoeff[6] * irradSHIntensity[6];
+  col += 2.0*c1*irradcoeff[7]*xz * irradSHIntensity[7];
+  col += c1*irradcoeff[8]*(x2-y2) * irradSHIntensity[8];
+  
+  return GammaToLinear(vec4(col/PI,1.0), float(GAMMA_FACTOR)).rgb;
+}
+
+vec3 getLightProbeIndirectIrradianceSH(const in vec3 N) {
+  vec3 worldNormal = inverseTransformDirection(N, viewMatrix);
+  vec3 queryVec = vec3(worldNormal.x, worldNormal.y, -worldNormal.z); //flip
+  return PI * sphericalHarmonics(queryVec) * irradianceMapIntensity;
+}
 
 void main() {
   GeometricContext geometry;
@@ -310,6 +377,10 @@ void main() {
   // IBL
   float blinnExponent = GGXRoughnessToBlinnExponent(material.specularRoughness);
   vec3 irradiance = getLightProbeIndirectIrradiance(geometry.normal, blinnExponent, 8);
+  irradiance = mix(irradiance, vec3(0.0), sign(irradSH));
+  RE_IndirectDiffuse(irradiance, geometry, material, reflectedLight);
+  irradiance = getLightProbeIndirectIrradianceSH(geometry.normal);
+  irradiance = mix(vec3(0.0), irradiance, sign(irradSH));
   RE_IndirectDiffuse(irradiance, geometry, material, reflectedLight);
   
   vec3 radiance = getLightProbeIndirectRadiance(geometry.viewDir, geometry.normal, blinnExponent, 8);
